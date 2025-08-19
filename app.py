@@ -1,5 +1,6 @@
-# Pharma Safety HMI — AI First (2.5D blueprint + live charts + smoke/shutters)
-import os, time, math, json, base64
+# Pharma Safety HMI — AI First
+# 2.5D facility cutaway + per-room views + live charts + gas/shutters + AI chat
+import os, time, json, base64
 from pathlib import Path
 from typing import Optional
 import streamlit as st
@@ -22,17 +23,18 @@ ROOM_DETECTORS = {
     "Production 1": ["Production 1: O2", "Production 1: CH4"],
     "Production 2": ["Production 2: O2", "Production 2: H2S"],
 }
-# Facility clickable rectangles (percent of image width/height): left, top, width, height
+
+# Facility hotspots (percent of image W/H): left, top, width, height
 ROOM_RECTS_PCT = {
     "Room 1":       (6.0,  8.0,  22.0, 20.0),
-    "Room 2":       (30.0,  8.0,  22.0, 20.0),
-    "Room 3":       (54.0,  8.0,  22.0, 20.0),
-    "Room 12":      (78.0,  8.0,  18.0, 20.0),
+    "Room 2":       (30.0, 8.0,  22.0, 20.0),
+    "Room 3":       (54.0, 8.0,  22.0, 20.0),
+    "Room 12":      (78.0, 8.0,  18.0, 20.0),
     "Production 1": (18.0, 40.0, 30.0, 30.0),
     "Production 2": (52.0, 40.0, 30.0, 30.0),
 }
 
-# Gas -> smoke color (RGBA with alpha 0-1)
+# Gas -> smoke color (RGBA with alpha 0..1)
 GAS_COLOR = {
     "NH3":      (168, 85, 247, 0.24),   # purple
     "CO":       (239, 68, 68, 0.26),    # red
@@ -59,6 +61,15 @@ def set_view(view: str, room: Optional[str] = None):
     st.session_state.view = view
     st.session_state.room = room
 
+# Sync navigation via URL query params (so image hotspots can link)
+qp = st.query_params
+if "view" in qp:
+    v = qp.get("view")
+    r = qp.get("room")
+    set_view(v, r if r else None)
+    # clear query params to keep URL clean after applying
+    st.query_params.clear()
+
 # -------------------- HELPERS --------------------
 def gas_from_label(key: str) -> str:
     k = key.lower()
@@ -74,98 +85,93 @@ def b64_image(path: Path) -> str:
     with open(path, "rb") as f:
         return "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
 
-# -------------------- AUTO-GENERATE 2.5D FACILITY --------------------
+# -------------------- AUTO-DRAW: 2.5D FACILITY & ROOMS --------------------
 def draw_facility_2p5d(path: Path, rects_pct: dict[str, tuple[float,float,float,float]]):
     W, H = 1400, 820
-    img = Image.new("RGBA", (W, H), (10, 15, 25, 255))
+    img = Image.new("RGBA", (W, H), (14, 18, 28, 255))
     d = ImageDraw.Draw(img)
 
-    # faint grid glow
+    # blueprint grid
     grid = Image.new("RGBA", (W, H), (0,0,0,0))
     dg = ImageDraw.Draw(grid)
-    for x in range(0, W, 40): dg.line((x, 0, x, H), fill=(22, 78, 99, 25), width=1)
-    for y in range(0, H, 40): dg.line((0, y, W, y), fill=(22, 78, 99, 25), width=1)
+    for x in range(0, W, 40): dg.line((x, 0, x, H), fill=(22, 78, 99, 22), width=1)
+    for y in range(0, H, 40): dg.line((0, y, W, y), fill=(22, 78, 99, 22), width=1)
     grid = grid.filter(ImageFilter.GaussianBlur(0.6))
     img.alpha_composite(grid)
 
-    wall_neon = (0, 200, 255, 255)
-    wall_inner = (15, 90, 135, 255)
-    floor_col = (18, 28, 45, 255)
-    shadow = (5, 8, 14, 130)
+    WALL_NEON = (0, 200, 255, 255)
+    WALL_IN = (18, 110, 155, 255)
+    FLOOR = (24, 33, 50, 255)
+    SHADOW = (3, 5, 9, 120)
 
-    # % -> px
     rooms_px = {}
     for name, (L,T,Wp,Hp) in rects_pct.items():
         x0 = int(L*W/100); y0 = int(T*H/100)
         x1 = x0 + int(Wp*W/100); y1 = y0 + int(Hp*H/100)
         rooms_px[name] = (x0,y0,x1,y1)
 
-    # floors with drop shadow
+    # floors & drop shadows
     for (x0,y0,x1,y1) in rooms_px.values():
-        ImageDraw.Draw(img).rectangle((x0+7, y0+9, x1+7, y1+9), fill=shadow)
-        d.rounded_rectangle((x0, y0, x1, y1), 18, fill=floor_col)
+        ImageDraw.Draw(img).rounded_rectangle((x0+7,y0+9,x1+7,y1+9), 20, fill=SHADOW)
+        d.rounded_rectangle((x0,y0,x1,y1), 20, fill=FLOOR)
 
-    # wall thickness + neon rim
+    # walls
     for (x0,y0,x1,y1) in rooms_px.values():
-        d.rounded_rectangle((x0, y0, x1, y0+12), 6, fill=wall_inner)
-        d.rounded_rectangle((x0, y1-12, x1, y1), 6, fill=wall_inner)
-        d.rounded_rectangle((x0, y0, x0+12, y1), 6, fill=wall_inner)
-        d.rounded_rectangle((x1-12, y0, x1, y1), 6, fill=wall_inner)
-        d.rounded_rectangle((x0, y0, x1, y1), 18, outline=wall_neon, width=3)
+        d.rounded_rectangle((x0,y0,x1,y0+12), 6, fill=WALL_IN)
+        d.rounded_rectangle((x0,y1-12,x1,y1), 6, fill=WALL_IN)
+        d.rounded_rectangle((x0,y0,x0+12,y1), 6, fill=WALL_IN)
+        d.rounded_rectangle((x1-12,y0,x1,y1), 6, fill=WALL_IN)
+        d.rounded_rectangle((x0,y0,x1,y1), 20, outline=WALL_NEON, width=3)
 
-    # furniture (blueprint line art)
+    # blueprint furniture per room (slightly realistic silhouettes)
     def boiler(x,y,w,h):
-        d.rounded_rectangle((x,y,x+w,y+h), 12, outline=wall_neon, width=2)
-        d.ellipse((x+w*0.35, y-10, x+w*0.65, y+14), outline=wall_neon, width=2)
+        d.rounded_rectangle((x,y,x+w,y+h), 14, outline=WALL_NEON, width=2)
+        d.ellipse((x+w*0.36, y-10, x+w*0.64, y+14), outline=WALL_NEON, width=2)
     def tank(x,y,r):
-        d.ellipse((x-r,y-r,x+r,y+r), outline=wall_neon, width=2)
+        d.ellipse((x-r,y-r,x+r,y+r), outline=WALL_NEON, width=2)
+        d.ellipse((x-r+6,y-r+6,x+r-6,y+r-6), outline=WALL_NEON, width=1)
     def bench(x,y,w,h):
-        d.rounded_rectangle((x,y,x+w,y+h), 8, outline=wall_neon, width=2)
+        d.rounded_rectangle((x,y,x+w,y+h), 10, outline=WALL_NEON, width=2)
 
     for name,(x0,y0,x1,y1) in rooms_px.items():
         cx, cy = (x0+x1)//2, (y0+y1)//2
         if "Production 1" in name:
-            boiler(x0+28, y0+40, 120, 160); bench(cx-140, cy+40, 120, 22); bench(cx+20, cy+40, 120, 22); tank(x1-70, y0+90, 40)
+            boiler(x0+28, y0+40, 120, 160); bench(cx-140, cy+40, 120, 22); bench(cx+20, cy+40, 120, 22); tank(x1-70, y0+90, 44)
         elif "Production 2" in name:
-            boiler(x1-160, y0+40, 120, 160); tank(x0+80, cy, 45); bench(cx-60, cy+60, 140, 22)
+            boiler(x1-160, y0+40, 120, 160); tank(x0+90, cy, 50); bench(cx-60, cy+64, 140, 22)
         elif "Room 1" in name:
-            tank(cx-30, cy-10, 35); bench(x0+30, y1-60, 160, 22)
+            tank(cx-30, cy-10, 38); bench(x0+30, y1-60, 170, 22)
         elif "Room 2" in name:
-            boiler(cx-70, y0+30, 140, 140)
+            boiler(cx-70, y0+34, 142, 142); bench(cx-80, y1-60, 160, 22)
         elif "Room 3" in name:
-            bench(cx-90, cy-20, 180, 22); tank(x1-80, cy+20, 35)
+            bench(cx-120, cy-16, 240, 22); tank(x1-84, cy+22, 38)
         elif "Room 12" in name:
             bench(x0+40, y0+40, 160, 22); bench(x1-200, y1-70, 160, 22)
-        d.text((x0+14, y0+10), name, fill=wall_neon)
+        d.text((x0+14, y0+10), name, fill=WALL_NEON)
 
     img.convert("RGB").save(path)
 
-# ensure facility image exists
+def draw_room_png(path: Path, label: str):
+    W, H = 1200, 700
+    img = Image.new("RGBA", (W, H), (17, 23, 36, 255))
+    d = ImageDraw.Draw(img)
+    # floor + shadow + walls
+    d.rectangle((24, 34, W-24, H-24), fill=(5,8,14,140))
+    d.rounded_rectangle((16, 26, W-16, H-16), 18, fill=(25,36,54,255))
+    for seg in [(16,26,W-16,38),(16,H-38,W-16,H-16),(16,26,28,H-16),(W-28,26,W-16,H-16)]:
+        d.rounded_rectangle(seg, 8, fill=(18,110,155,255))
+    d.rounded_rectangle((16, 26, W-16, H-16), 18, outline=(0,200,255,255), width=3)
+    # equipment
+    d.rounded_rectangle((160, 170, 310, 370), 14, outline=(0,200,255,255), width=2)   # boiler
+    d.ellipse((870, 240, 960, 330), outline=(0,200,255,255), width=2)                 # tank
+    d.rounded_rectangle((520, 470, 790, 500), 10, outline=(0,200,255,255), width=2)   # bench
+    d.text((30, 30), label, fill=(0,200,255,255))
+    img.convert("RGB").save(path)
+
+# ensure images exist
 fac_png = ASSETS / "facility.png"
 if not fac_png.exists():
     draw_facility_2p5d(fac_png, ROOM_RECTS_PCT)
-
-# ensure simple room images exist (matching style)
-def draw_room_png(path: Path, label: str):
-    W, H = 1200, 700
-    img = Image.new("RGBA", (W, H), (15, 20, 35, 255))
-    d = ImageDraw.Draw(img)
-    # floor + shadow
-    d.rectangle((18, 26, W-18, H-18), fill=(5,8,14,130))
-    d.rounded_rectangle((10, 18, W-10, H-10), 16, fill=(18,28,45,255))
-    # walls
-    d.rounded_rectangle((10, 18, W-10, 30), 8, fill=(15,90,135,255))
-    d.rounded_rectangle((10, H-30, W-10, H-10), 8, fill=(15,90,135,255))
-    d.rounded_rectangle((10, 18, 22, H-10), 8, fill=(15,90,135,255))
-    d.rounded_rectangle((W-22, 18, W-10, H-10), 8, fill=(15,90,135,255))
-    d.rounded_rectangle((10, 18, W-10, H-10), 16, outline=(0,200,255,255), width=3)
-    # a few devices
-    d.rounded_rectangle((140, 180, 280, 360), 12, outline=(0,200,255,255), width=2)
-    d.ellipse((850, 220, 920, 290), outline=(0,200,255,255), width=2)
-    d.rounded_rectangle((500, 460, 760, 490), 8, outline=(0,200,255,255), width=2)
-    d.text((26, 26), label, fill=(0,200,255,255))
-    img.convert("RGB").save(path)
-
 for rn in ROOMS:
     p = ASSETS / f"{rn.replace(' ', '_').lower()}.png"
     if not p.exists():
@@ -233,13 +239,15 @@ def render_sidebar_ai():
     </script>
     """, height=560, scrolling=True)
 
-# -------------------- FACILITY VIEW --------------------
+# -------------------- FACILITY VIEW (image + hotspots + smoke/shutters) --------------------
 def render_facility():
     st.title("Pharma Safety HMI — AI First")
-    st.subheader("Facility Overview (2.5D Blueprint)")
-    facility_b64 = b64_image(ASSETS / "facility.png")
+    st.subheader("Facility Overview (2.5D Cutaway)")
 
+    facility_b64 = b64_image(ASSETS / "facility.png")
     rects = ROOM_RECTS_PCT
+
+    # Active spike snapshot for animation
     sp = st.session_state.spike
     active = None
     if sp:
@@ -247,43 +255,45 @@ def render_facility():
         active = {
             "room": sp["room"], "gas": sp["gas"], "start_ts": sp["start_ts"],
             "duration": sp["duration"], "shutters_at": sp["shutters_at"],
-            "fade_after": sp["fade_after"], "color": rgba, "rect": rects.get(sp["room"])
+            "fade_after": sp["fade_after"], "color": rgba,
+            "rect": rects.get(sp["room"])
         }
 
-    payload = json.dumps({"image": facility_b64, "rects": rects, "active": active})
+    payload = json.dumps({"rects": rects, "active": active})
 
-    # Navigation buttons
-    st.markdown("#### Rooms")
-    cols = st.columns(3)
-    for i, rn in enumerate(ROOMS):
-        with cols[i % 3]:
-            if st.button(rn, key=f"enter_{rn}"):
-                set_view("room", rn)
-                st.rerun()
+    # Canvas + absolute hotspots (anchors navigate top window via query params)
+    html_hotspots = []
+    for rn, (L,T,Wp,Hp) in rects.items():
+        href = f"?view=room&room={rn.replace(' ', '%20')}"
+        html_hotspots.append(
+            f'''<a href="{href}" class="hotspot" style="left:{L}%;top:{T}%;width:{Wp}%;height:{Hp}%;">{rn}</a>'''
+        )
+    hotspots_html = "\n".join(html_hotspots)
 
-    # Spike controls
-    st.markdown("---")
-    colA, colB = st.columns([1,2])
-    with colA:
-        room_choice = st.selectbox("Simulate spike in…", ROOMS, key="fac_spike_room")
-        first_key = ROOM_DETECTORS[room_choice][0]
-        gas = gas_from_label(first_key)
-        if st.button("Simulate Spike (Facility View)", key="fac_spike_btn"):
-            st.session_state.spike = {
-                "room": room_choice, "gas": gas, "start_ts": time.time(),
-                "duration": 14, "shutters_at": 5, "fade_after": 9
-            }
-            st.rerun()
-    with colB:
-        st.caption("Legend:  🟣 NH₃   🔴 CO   🔵 Low O₂   🟠 Ethanol   🟡 CH₄   🟢 H₂S")
-
-    # Image + canvas overlay (smoke + shutters)
     components.html(f"""
-    <div style="position:relative; width:100%; max-width:1200px; margin: 8px 0 16px 0;">
-      <img id="bg" src="{facility_b64}" style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid #1f2a44;"/>
-      <canvas id="fx" style="position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none;"></canvas>
+    <style>
+      .wrap {{
+        position: relative; width: min(1200px, 96%); margin: 10px auto 16px auto;
+        border-radius: 12px; border:1px solid #1f2a44; overflow:hidden;
+        box-shadow: 0 24px 80px rgba(0,0,0,.35);
+      }}
+      .wrap img {{ display:block; width:100%; height:auto; }}
+      .hotspot {{
+        position:absolute; display:flex; align-items:flex-start; justify-content:flex-start;
+        color:#67e8f9; font: 600 12px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+        border:1px dashed rgba(0,200,255,.35); border-radius:12px; padding:8px;
+        text-decoration:none; background: rgba(13, 25, 40, .06);
+      }}
+      .hotspot:hover {{ background: rgba(13, 25, 40, .16); }}
+      #fx {{ position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }}
+    </style>
+    <div class="wrap">
+      <img id="bg" src="{facility_b64}" alt="facility"/>
+      <canvas id="fx"></canvas>
+      {hotspots_html}
     </div>
     <script>
+      // animation payload from Python
       const payload = {payload};
       const img = document.getElementById('bg');
       const canvas = document.getElementById('fx');
@@ -312,7 +322,7 @@ def render_facility():
       }}
       function drawShutters(rect, k) {{
         const [l,t,w,h] = rect;
-        const y = t + (-h * (1-k));
+        const y = t + (-h * (1-k)); // slide from top
         ctx.fillStyle = 'rgba(148,163,184,0.22)';
         ctx.fillRect(l, y, w, h);
         ctx.strokeStyle = 'rgba(148,163,184,0.35)';
@@ -348,39 +358,53 @@ def render_facility():
       window.addEventListener('resize', resize);
       if (img.complete) resize(); else img.onload = resize;
     </script>
-    """, height=720, scrolling=False)
+    """, height=760, scrolling=False)
 
-# -------------------- ROOM VIEW --------------------
+    # Legend + spike controls
+    st.caption("Legend:  🟣 NH₃   🔴 CO   🔵 Low O₂   🟠 Ethanol   🟡 CH₄   🟢 H₂S")
+    colA, colB = st.columns([1,2])
+    with colA:
+        room_choice = st.selectbox("Simulate spike in…", ROOMS, key="fac_spike_room")
+        gas = gas_from_label(ROOM_DETECTORS[room_choice][0])
+        if st.button("Simulate Spike"):
+            st.session_state.spike = {
+                "room": room_choice, "gas": gas, "start_ts": time.time(),
+                "duration": 14, "shutters_at": 5, "fade_after": 9
+            }
+            st.rerun()
+    with colB:
+        st.caption("Click any room on the image to enter its detail view.")
+
+# -------------------- ROOM VIEW (2.5D + detectors + live charts) --------------------
 def render_room(rn: str):
     st.subheader(f"{rn} — Interior View")
-    room_b64 = b64_image(ASSETS / f"{rn.replace(' ','_').lower()}.png")
 
-    # Primary gas in this room (for one-click demo)
-    primary_key = ROOM_DETECTORS[rn][0]
-    gas = gas_from_label(primary_key)
+    room_b64 = b64_image(ASSETS / f"{rn.replace(' ','_').lower()}.png")
+    gas = gas_from_label(ROOM_DETECTORS[rn][0])
 
     colL, colR = st.columns([2,1])
     with colL:
-        if st.button("← Back to Facility", key=f"back_{rn}"):
+        if st.button("← Back to Facility"):
             set_view("facility")
             st.rerun()
     with colR:
         st.markdown("**Simulate Spike (Room)**")
-        if st.button(f"Simulate {gas} Spike", key=f"room_spike_{rn}"):
+        if st.button(f"Simulate {gas} Spike"):
             st.session_state.spike = {
                 "room": rn, "gas": gas, "start_ts": time.time(),
                 "duration": 14, "shutters_at": 5, "fade_after": 9
             }
             st.rerun()
 
-    # If spike for this room -> animate here too
+    # Active spike for this room (for animation)
     sp = st.session_state.spike
     active = None
     if sp and sp["room"] == rn:
         rgba = GAS_COLOR.get(sp["gas"], (239,68,68,0.25))
         active = {**sp, "color": rgba}
-    payload = json.dumps({"image": room_b64, "active": active})
+    payload = json.dumps({"active": active})
 
+    # Room image + animation canvas
     components.html(f"""
     <div style="position:relative; width:100%; max-width:1200px; margin: 8px 0 16px 0;">
       <img id="bg" src="{room_b64}" style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid #1f2a44;"/>
@@ -397,7 +421,6 @@ def render_room(rn: str):
         canvas.width = r.width; canvas.height = r.height;
         draw();
       }}
-
       function drawBlob(cx, cy, baseR, color, layers=14) {{
         for (let i=0;i<layers;i++) {{
           const k = 1 - i/layers;
@@ -409,7 +432,6 @@ def render_room(rn: str):
           ctx.fill();
         }}
       }}
-
       function drawShutters(k) {{
         const w = canvas.width, h = canvas.height;
         const y = -h*(1-k);
@@ -424,7 +446,6 @@ def render_room(rn: str):
           ctx.stroke();
         }}
       }}
-
       function draw() {{
         ctx.clearRect(0,0,canvas.width,canvas.height);
         if (!payload.active) return;
@@ -454,19 +475,19 @@ def render_room(rn: str):
         }}
         requestAnimationFrame(draw);
       }}
-
       window.addEventListener('load', resize);
       window.addEventListener('resize', resize);
       if (img.complete) resize(); else img.onload = resize;
     </script>
     """, height=720, scrolling=False)
 
-    # Detectors + live chart (Chart.js; 500ms updates)
+    # Detectors with **buttons** + **live charts**
     st.markdown("### Detectors")
     for key in ROOM_DETECTORS.get(rn, []):
         c1, c2, c3 = st.columns([3,4,2])
         with c1:
-            st.write(key)
+            # Detector button (acts as the “detector object”)
+            st.button(key, key=f"detbtn_{key}")
             if st.button("Simulate Spike", key=f"spike_{key}"):
                 g = gas_from_label(key)
                 st.session_state.spike = {
@@ -492,9 +513,7 @@ def render_room(rn: str):
             <script>
               const cfg = {js_payload};
               const ctx = document.getElementById('ch_{key.replace(' ','_')}').getContext('2d');
-              const N = 120; // last 60s @ 500ms
-              const data = [];
-              const labels = [];
+              const N = 120; const data = []; const labels = [];
               for (let i=0;i<N;i++){{labels.push(''); data.push(null);}}
               const color = 'rgba(59,130,246,0.9)';
               const chart = new Chart(ctx, {{
@@ -506,52 +525,33 @@ def render_room(rn: str):
                     data: data,
                     borderColor: color,
                     backgroundColor: 'rgba(59,130,246,0.2)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    tension: 0.25
+                    borderWidth: 2, pointRadius: 0, tension: 0.25
                   }}]
                 }},
                 options: {{
-                  responsive: true,
-                  animation: false,
+                  responsive: true, animation: false,
                   scales: {{
                     x: {{ display:false }},
-                    y: {{
-                      beginAtZero: false,
-                      grid: {{ color: 'rgba(148,163,184,0.15)' }},
-                      ticks: {{ color:'#cbd5e1' }}
-                    }}
+                    y: {{ beginAtZero: false,
+                         grid: {{ color: 'rgba(148,163,184,0.15)' }},
+                         ticks: {{ color:'#cbd5e1' }} }}
                   }},
-                  plugins: {{
-                    legend: {{ display:false }},
-                    tooltip: {{ enabled: true }}
-                  }}
+                  plugins: {{ legend: {{ display:false }}, tooltip: {{ enabled: true }} }}
                 }}
               }});
               function baseValue(t) {{
-                if (cfg.mode === 'low' && cfg.units.includes('%')) {{
-                  return 20.8 + 0.2*Math.sin(t/2200);
-                }} else if (cfg.units === 'ppm') {{
-                  return 10 + 6*Math.sin(t/1500);
-                }} else if (cfg.units.includes('%LEL')) {{
-                  return 4 + 2*Math.sin(t/1100);
-                }} else {{
-                  return 10 + 5*Math.sin(t/1500);
-                }}
+                if (cfg.mode === 'low' && cfg.units.includes('%')) return 20.8 + 0.2*Math.sin(t/2200);
+                else if (cfg.units === 'ppm') return 10 + 6*Math.sin(t/1500);
+                else if (cfg.units.includes('%LEL')) return 4 + 2*Math.sin(t/1100);
+                else return 10 + 5*Math.sin(t/1500);
               }}
-              let t0 = performance.now();
-              let spikeK = 0;
+              let t0 = performance.now(); let spikeK = 0;
               function step() {{
-                const now = performance.now();
-                const t = now - t0;
-                if (cfg.spike) spikeK = Math.min(1, spikeK + 0.02);
-                else           spikeK = Math.max(0, spikeK - 0.02);
+                const t = performance.now() - t0;
+                if (cfg.spike) spikeK = Math.min(1, spikeK + 0.02); else spikeK = Math.max(0, spikeK - 0.02);
                 let v = baseValue(t);
-                if (cfg.mode === 'low' && cfg.units.includes('%')) v -= 2.5*spikeK;
-                else v += 12*spikeK;
-                data.push(v);
-                if (data.length > N) data.shift();
-                chart.update();
+                if (cfg.mode === 'low' && cfg.units.includes('%')) v -= 2.5*spikeK; else v += 12*spikeK;
+                data.push(v); if (data.length > N) data.shift(); chart.update();
                 setTimeout(step, 500);
               }}
               step();
@@ -567,4 +567,5 @@ if st.session_state.view == "facility":
     render_facility()
 elif st.session_state.view == "room" and st.session_state.room:
     render_room(st.session_state.room)
+
 
