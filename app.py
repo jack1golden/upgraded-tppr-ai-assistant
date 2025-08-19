@@ -143,8 +143,6 @@ def render_sidebar_ai():
     sp = st.session_state.spike
     data = None
     if sp:
-        # Prepare chat timing windows (seconds since spike start)
-        # 0s: detection; 2s: warn; 5s: close shutters; 7s: isolated; 10s: ventilation; 13s: safe
         data = {
             "room": sp["room"],
             "gas": sp["gas"],
@@ -195,25 +193,17 @@ def render_sidebar_ai():
       if (!data) {{
         bubble('System idle. No active events.');
       }} else {{
-        const start = data.start_ts * 1000; // sec->ms
-        const gas = data.gas;
-        const room = data.room;
-        // Seed first message immediately
-        bubble(`[${{ts()}}] 🤖 AI: ${{
-          gasEmoji[gas] || ''
-        }} ${data.events[0].msg}`);
-        // Schedule the rest with short delays
+        bubble(`[${{ts()}}] 🤖 AI: ${{ gasEmoji[data.gas] || '' }} ${{data.events[0].msg}}`);
         for (let i=1;i<data.events.length;i++) {{
           const ev = data.events[i];
           setTimeout(() => {{
-            bubble(`[${{ts()}}] 🤖 AI: ${{
-              gasEmoji[gas] || ''
-            }} ${ev.msg}`);
+            bubble(`[${{ts()}}] 🤖 AI: ${{ gasEmoji[data.gas] || '' }} ${{ev.msg}}`);
           }}, ev.at*1000);
         }}
       }}
     </script>
     """, height=560, scrolling=True)
+
 
 # ===================== FACILITY (image + canvas smoke/shutters) =====================
 def render_facility():
