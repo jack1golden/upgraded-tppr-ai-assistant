@@ -210,10 +210,8 @@ def render_facility():
     st.title("Pharma Safety HMI — AI First")
     st.subheader("Facility Overview (2.5D Blueprint)")
 
-    # Background image as data URI for the canvas overlay
     facility_b64 = b64_image(ASSETS / "facility.png")
 
-    # Pack rectangles and active spike for JS
     rects = ROOM_RECTS_PCT
     sp = st.session_state.spike
     active = None
@@ -230,13 +228,8 @@ def render_facility():
             "rect": rects.get(sp["room"])
         }
 
-    payload = json.dumps({
-        "image": facility_b64,
-        "rects": rects,
-        "active": active
-    })
+    payload = json.dumps({"image": facility_b64, "rects": rects, "active": active})
 
-    # Room navigation buttons (no use_column_width on buttons)
     st.markdown("#### Rooms")
     cols = st.columns(3)
     for i, rn in enumerate(ROOMS):
@@ -245,7 +238,6 @@ def render_facility():
                 set_view("room", rn)
                 st.rerun()
 
-    # Simulate spike controls
     st.markdown("---")
     colA, colB = st.columns([1, 2])
     with colA:
@@ -267,7 +259,6 @@ def render_facility():
         st.caption("Gas colors legend:")
         st.markdown("🟣 NH₃ &nbsp;&nbsp; 🔴 CO &nbsp;&nbsp; 🔵 Low O₂ &nbsp;&nbsp; 🟠 Ethanol &nbsp;&nbsp; 🟡 CH₄ &nbsp;&nbsp; 🟢 H₂S")
 
-    # Canvas animation with JS (smoke + shutters)
     components.html(f"""
     <div style="position:relative; width:100%; max-width:1200px; margin: 8px 0 16px 0;">
       <img id="bg" src="{facility_b64}" style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid #1f2a44;"/>
@@ -278,27 +269,31 @@ def render_facility():
       const img = document.getElementById('bg');
       const canvas = document.getElementById('fx');
       const ctx = canvas.getContext('2d');
+
       function resize() {{
         const r = img.getBoundingClientRect();
         canvas.width = r.width; canvas.height = r.height;
         draw();
       }}
+
       function pctToPx(rectPct) {{
         const r = img.getBoundingClientRect();
         const l = rectPct[0]*r.width/100, t = rectPct[1]*r.height/100;
         const w = rectPct[2]*r.width/100, h = rectPct[3]*r.height/100;
         return [l,t,w,h];
       }}
+
       function drawSmokeRect(rect, progress, color) {{
         const [l,t,w,h] = rect;
         const steps = 20;
         for (let i=0;i<steps;i++) {{
           const alpha = color[3] * (1 - i/steps) * Math.min(1, progress);
-          ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${alpha})`;
+          ctx.fillStyle = `rgba(${{color[0]}},${{color[1]}},${{color[2]}},${{alpha}})`;
           const inset = (1 - progress) * (Math.min(w,h)*0.45) * (i/steps);
           ctx.fillRect(l+inset, t+inset, w-2*inset, h-2*inset);
         }}
       }}
+
       function drawShutters(rect, k) {{
         const [l,t,w,h] = rect;
         const y = t + (-h * (1-k));
@@ -313,6 +308,7 @@ def render_facility():
           ctx.stroke();
         }}
       }}
+
       function draw() {{
         ctx.clearRect(0,0,canvas.width,canvas.height);
         if (!payload.active) return;
@@ -333,10 +329,10 @@ def render_facility():
         }}
         requestAnimationFrame(draw);
       }}
+
       window.addEventListener('load', resize);
       window.addEventListener('resize', resize);
-      if (img.complete) resize();
-      else img.onload = resize;
+      if (img.complete) resize(); else img.onload = resize;
     </script>
     """, height=720, scrolling=False)
 
@@ -345,17 +341,14 @@ def render_room(rn: str):
     st.subheader(f"{rn} — Interior View")
     room_b64 = b64_image(ASSETS / f"{rn.replace(' ','_').lower()}.png")
 
-    # Determine primary detector/gas for this room for the demo controls
     primary_key = ROOM_DETECTORS[rn][0]
     gas = gas_from_label(primary_key)
 
-    # Controls
     colL, colR = st.columns([2,1])
     with colL:
         if st.button("← Back to Facility", key=f"back_{rn}"):
             set_view("facility")
             st.rerun()
-
     with colR:
         st.markdown("**Simulate Spike (Room)**")
         if st.button(f"Simulate {gas} Spike", key=f"room_spike_{rn}"):
@@ -370,19 +363,14 @@ def render_room(rn: str):
             simulate_live_values()
             st.rerun()
 
-    # Pack active spike info for this room
     sp = st.session_state.spike
     active = None
     if sp and sp["room"] == rn:
         rgba = GAS_COLOR.get(sp["gas"], (239,68,68,0.25))
         active = {**sp, "color": rgba}
 
-    payload = json.dumps({
-        "image": room_b64,
-        "active": active
-    })
+    payload = json.dumps({"image": room_b64, "active": active})
 
-    # Canvas animation (room)
     components.html(f"""
     <div style="position:relative; width:100%; max-width:1200px; margin: 8px 0 16px 0;">
       <img id="bg" src="{room_b64}" style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid #1f2a44;"/>
@@ -406,7 +394,7 @@ def render_room(rn: str):
           const r = baseR * (0.25 + 0.85*k) * (1 + 0.08*Math.sin(i*1.7));
           const a = color[3] * (0.7*k);
           ctx.beginPath();
-          ctx.fillStyle = `rgba(${color[0]},${color[1]},${color[2]},${a})`;
+          ctx.fillStyle = `rgba(${{color[0]}},${{color[1]}},${{color[2]}},${{a}})`;
           ctx.ellipse(cx + 6*Math.sin(i*0.9), cy + 4*Math.cos(i*1.1), r*1.2, r, 0, 0, Math.PI*2);
           ctx.fill();
         }}
@@ -459,12 +447,10 @@ def render_room(rn: str):
 
       window.addEventListener('load', resize);
       window.addEventListener('resize', resize);
-      if (img.complete) resize();
-      else img.onload = resize;
+      if (img.complete) resize(); else img.onload = resize;
     </script>
     """, height=720, scrolling=False)
 
-    # Detector list + simple trend placeholder
     st.markdown("### Detectors")
     for key in ROOM_DETECTORS.get(rn, []):
         c1, c2, c3 = st.columns([3,3,2])
