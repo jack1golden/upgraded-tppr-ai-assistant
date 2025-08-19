@@ -30,6 +30,80 @@ ROOM_RECTS_PCT = {
     "Room 12":      (78.0,  8.0,  18.0, 20.0),
     "Production 1": (18.0, 40.0, 30.0, 30.0),
     "Production 2": (52.0, 40.0, 30.0, 30.0),
+    # ---------- 2.5D FACILITY DRAW (Pillow, auto-generate if missing) ----------
+
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+def draw_facility_2p5d(path: Path, rects_pct: dict[str, tuple[float,float,float,float]]):
+    W, H = 1400, 820
+    img = Image.new("RGBA", (W, H), (10, 15, 25, 255))
+    d = ImageDraw.Draw(img)
+
+    # subtle grid
+    grid = Image.new("RGBA", (W, H), (0,0,0,0))
+    dg = ImageDraw.Draw(grid)
+    for x in range(0, W, 40): dg.line((x, 0, x, H), fill=(22, 78, 99, 25), width=1)
+    for y in range(0, H, 40): dg.line((0, y, W, y), fill=(22, 78, 99, 25), width=1)
+    grid = grid.filter(ImageFilter.GaussianBlur(0.6))
+    img.alpha_composite(grid)
+
+    wall_neon = (0, 200, 255, 255)
+    wall_inner = (15, 90, 135, 255)
+    floor_col = (18, 28, 45, 255)
+    shadow = (5, 8, 14, 130)
+
+    # % -> px
+    rooms_px = {}
+    for name, (L,T,Wp,Hp) in rects_pct.items():
+        x0 = int(L*W/100); y0 = int(T*H/100)
+        x1 = x0 + int(Wp*W/100); y1 = y0 + int(Hp*H/100)
+        rooms_px[name] = (x0,y0,x1,y1)
+
+    # floors (with drop shadow)
+    for (x0,y0,x1,y1) in rooms_px.values():
+        ImageDraw.Draw(img).rectangle((x0+7, y0+9, x1+7, y1+9), fill=shadow)
+        d.rounded_rectangle((x0, y0, x1, y1), 18, fill=floor_col)
+
+    # wall thickness + neon edge
+    for (x0,y0,x1,y1) in rooms_px.values():
+        d.rounded_rectangle((x0, y0, x1, y0+12), 6, fill=wall_inner)
+        d.rounded_rectangle((x0, y1-12, x1, y1), 6, fill=wall_inner)
+        d.rounded_rectangle((x0, y0, x0+12, y1), 6, fill=wall_inner)
+        d.rounded_rectangle((x1-12, y0, x1, y1), 6, fill=wall_inner)
+        d.rounded_rectangle((x0, y0, x1, y1), 18, outline=wall_neon, width=3)
+
+    # simple blueprint furniture
+    def boiler(x,y,w,h):
+        d.rounded_rectangle((x,y,x+w,y+h), 12, outline=wall_neon, width=2)
+        d.ellipse((x+w*0.35, y-10, x+w*0.65, y+14), outline=wall_neon, width=2)
+    def tank(x,y,r):
+        d.ellipse((x-r,y-r,x+r,y+r), outline=wall_neon, width=2)
+    def bench(x,y,w,h):
+        d.rounded_rectangle((x,y,x+w,y+h), 8, outline=wall_neon, width=2)
+
+    for name,(x0,y0,x1,y1) in rooms_px.items():
+        cx, cy = (x0+x1)//2, (y0+y1)//2
+        if "Production 1" in name:
+            boiler(x0+28, y0+40, 120, 160); bench(cx-140, cy+40, 120, 24); bench(cx+20, cy+40, 120, 24); tank(x1-70, y0+90, 40)
+        elif "Production 2" in name:
+            boiler(x1-160, y0+40, 120, 160); tank(x0+80, cy, 45); bench(cx-60, cy+60, 140, 22)
+        elif "Room 1" in name:
+            tank(cx-30, cy-10, 35); bench(x0+30, y1-60, 160, 22)
+        elif "Room 2" in name:
+            boiler(cx-70, y0+30, 140, 140)
+        elif "Room 3" in name:
+            bench(cx-90, cy-20, 180, 22); tank(x1-80, cy+20, 35)
+        elif "Room 12" in name:
+            bench(x0+40, y0+40, 160, 22); bench(x1-200, y1-70, 160, 22)
+        d.text((x0+14, y0+10), name, fill=wall_neon)
+
+    img.convert("RGB").save(path)
+
+# create pretty facility if missing (or if you want to force-regenerate, delete the PNG once)
+fac_png = ASSETS / "facility.png"
+if not fac_png.exists():
+    draw_facility_2p5d(fac_png, ROOM_RECTS_PCT)
+
 }
 # Gas colors (smoke)
 GAS_COLOR = {
@@ -468,27 +542,102 @@ def render_room(rn: str):
                 }
                 simulate_live_values()
                 st.rerun()
-        with c2:
-            simulate_live_values()
-            df = get_series(key)
-            if df.empty:
-                st.line_chart(pd.DataFrame({"value": []}))
-            else:
-                st.line_chart(pd.DataFrame({"value": df["value"].tail(150)}))
-        with c3:
-            live = st.session_state.latest.get(key, (0, float("nan")))[1]
-            g = gas_from_label(key)
-            thr = DEFAULT_THR[g]
-            if math.isnan(live):
-                st.info("No data yet")
-            else:
-                s = status_for_value(g, live)
-                if s == "ALARM":
-                    st.error(f"ALARM • {live:.2f}{thr['units']}")
-                elif s == "WARN":
-                    st.warning(f"WARN • {live:.2f}{thr['units']}")
-                else:
-                    st.success(f"Healthy • {live:.2f}{thr['units']}")
+ with c2:
+    # feed the chart with live JS (no page reruns)
+    g = gas_from_label(key)
+    thr = DEFAULT_THR[g]
+    sp = st.session_state.spike
+    # Tell JS whether to “bump” this series due to a spike in this same room/gas
+    active_for_this = bool(sp and sp["room"] == rn and sp["gas"] == g)
+    js_payload = json.dumps({
+        "units": thr["units"],
+        "mode": thr["mode"],
+        "warn": thr["warn"],
+        "alarm": thr["alarm"],
+        "spike": active_for_this
+    })
+
+    components.html(f"""
+    <div style="background:#0b1220;border:1px solid #1f2a44;border-radius:10px;padding:6px">
+      <canvas id="ch" height="140"></canvas>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      const cfg = {js_payload};
+      const ctx = document.getElementById('ch').getContext('2d');
+      const N = 120; // last 60s @ 500ms
+      const data = [];
+      const labels = [];
+      for (let i=0;i<N;i++){{labels.push(''); data.push(null);}}
+      const color = 'rgba(59,130,246,0.9)';
+      const chart = new Chart(ctx, {{
+        type: 'line',
+        data: {{
+          labels: labels,
+          datasets: [{{
+            label: 'Live',
+            data: data,
+            borderColor: color,
+            backgroundColor: 'rgba(59,130,246,0.2)',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.25
+          }}]
+        }},
+        options: {{
+          responsive: true,
+          animation: false,
+          scales: {{
+            x: {{ display:false }},
+            y: {{
+              beginAtZero: false,
+              grid: {{ color: 'rgba(148,163,184,0.15)' }},
+              ticks: {{ color:'#cbd5e1' }}
+            }}
+          }},
+          plugins: {{
+            legend: {{ display:false }},
+            tooltip: {{ enabled: true }}
+          }}
+        }}
+      }});
+
+      // baseline generator
+      function baseValue(t) {{
+        if (cfg.mode === 'low' && cfg.units.includes('%')) {{
+          return 20.8 + 0.2*Math.sin(t/2200);
+        }} else if (cfg.units === 'ppm') {{
+          return 10 + 6*Math.sin(t/1500);
+        }} else if (cfg.units.includes('%LEL')) {{
+          return 4 + 2*Math.sin(t/1100);
+        }} else {{
+          return 10 + 5*Math.sin(t/1500);
+        }}
+      }}
+
+      let t0 = performance.now();
+      let spikeK = 0;
+
+      function step() {{
+        const now = performance.now();
+        const t = now - t0;
+
+        if (cfg.spike) spikeK = Math.min(1, spikeK + 0.02);
+        else           spikeK = Math.max(0, spikeK - 0.02);
+
+        let v = baseValue(t);
+        if (cfg.mode === 'low' && cfg.units.includes('%')) v -= 2.5*spikeK;
+        else v += 12*spikeK;
+
+        data.push(v);
+        if (data.length > N) data.shift();
+        chart.update();
+
+        setTimeout(step, 500);
+      }}
+      step();
+    </script>
+    """, height=190, scrolling=False)
 
 
 # ===================== ROUTING =====================
