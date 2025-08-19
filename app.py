@@ -207,42 +207,23 @@ def render_sidebar_ai():
 
 # ===================== FACILITY (image + canvas smoke/shutters) =====================
 def render_facility():
-    st.title("Pharma Safety HMI — AI First")
     st.subheader("Facility Overview (2.5D Blueprint)")
 
-    facility_b64 = b64_image(ASSETS / "facility.png")
+    # Show the facility map
+    st.image(str(ASSETS / "facility.png"), caption="Facility Cutaway", use_column_width=True)
 
-    # Pack rectangles and active spike for JS
-    rects = ROOM_RECTS_PCT
-    sp = st.session_state.spike
-    active = None
-    if sp:
-        rgba = GAS_COLOR.get(sp["gas"], (239,68,68,0.25))
-        active = {
-            "room": sp["room"],
-            "gas": sp["gas"],
-            "start_ts": sp["start_ts"],
-            "duration": sp["duration"],
-            "shutters_at": sp["shutters_at"],
-            "fade_after": sp["fade_after"],
-            "color": rgba,
-            "rect": rects.get(sp["room"])
-        }
+    st.markdown("### Rooms")
+    st.caption("Click on a room to enter its detail view.")
 
-    payload = json.dumps({
-        "image": facility_b64,
-        "rects": rects,
-        "active": active
-    })
-
-    # Buttons row
-    st.markdown("#### Rooms")
-    cols = st.columns(3)
-    for i, rn in enumerate(ROOMS):
-        with cols[i % 3]:
-            if st.button(rn, use_column_width=True, key=f"enter_{rn}"):
-                set_view("room", rn)
+    for rn in ROOMS:
+        # Put each button in its own full-width container
+        col = st.columns([1])[0]
+        with col:
+            if st.button(rn, key=f"enter_{rn}"):
+                st.session_state.view = "room"
+                st.session_state.room = rn
                 st.experimental_rerun()
+
 
     # Simulate spike at facility-level (applies to first detector gas in that room)
     st.markdown("---")
