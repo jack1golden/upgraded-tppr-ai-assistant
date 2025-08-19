@@ -207,48 +207,67 @@ def render_sidebar_ai():
 
 # ===================== FACILITY (image + canvas smoke/shutters) =====================
 def render_facility():
+    st.title("Pharma Safety HMI — AI First")
     st.subheader("Facility Overview (2.5D Blueprint)")
 
-    # Show the facility map
-    st.image(str(ASSETS / "facility.png"), caption="Facility Cutaway", use_column_width=True)
+    # Background image as data URI for the canvas overlay
+    facility_b64 = b64_image(ASSETS / "facility.png")
 
-    st.markdown("### Rooms")
-    st.caption("Click on a room to enter its detail view.")
+    # Pack rectangles and active spike for JS
+    rects = ROOM_RECTS_PCT
+    sp = st.session_state.spike
+    active = None
+    if sp:
+        rgba = GAS_COLOR.get(sp["gas"], (239, 68, 68, 0.25))
+        active = {
+            "room": sp["room"],
+            "gas": sp["gas"],
+            "start_ts": sp["start_ts"],
+            "duration": sp["duration"],
+            "shutters_at": sp["shutters_at"],
+            "fade_after": sp["fade_after"],
+            "color": rgba,
+            "rect": rects.get(sp["room"])
+        }
 
-    for rn in ROOMS:
-        # Put each button in its own full-width container
-        col = st.columns([1])[0]
-        with col:
+    payload = json.dumps({
+        "image": facility_b64,
+        "rects": rects,
+        "active": active
+    })
+
+    # Room navigation buttons (no use_column_width on buttons)
+    st.markdown("#### Rooms")
+    cols = st.columns(3)
+    for i, rn in enumerate(ROOMS):
+        with cols[i % 3]:
             if st.button(rn, key=f"enter_{rn}"):
-                st.session_state.view = "room"
-                st.session_state.room = rn
-                st.experimental_rerun()
+                set_view("room", rn)
+                st.rerun()
 
-
-    # Simulate spike at facility-level (applies to first detector gas in that room)
+    # Simulate spike controls
     st.markdown("---")
-    colA, colB = st.columns([1,2])
+    colA, colB = st.columns([1, 2])
     with colA:
         room_choice = st.selectbox("Simulate spike in…", ROOMS, key="fac_spike_room")
-        # choose gas from room detectors (first gas if multiple)
         first_key = ROOM_DETECTORS[room_choice][0]
         gas = gas_from_label(first_key)
-        if st.button("Simulate Spike (Facility View)", use_column_width=True, key="fac_spike_btn"):
+        if st.button("Simulate Spike (Facility View)", key="fac_spike_btn"):
             st.session_state.spike = {
                 "room": room_choice,
                 "gas": gas,
                 "start_ts": time.time(),
-                "duration": 14,      # total animation seconds
-                "shutters_at": 5,    # when shutters close
-                "fade_after": 9      # when to start fade
+                "duration": 14,
+                "shutters_at": 5,
+                "fade_after": 9
             }
-            simulate_live_values()  # push initial bump
-            st.experimental_rerun()
+            simulate_live_values()
+            st.rerun()
     with colB:
         st.caption("Gas colors legend:")
         st.markdown("🟣 NH₃ &nbsp;&nbsp; 🔴 CO &nbsp;&nbsp; 🔵 Low O₂ &nbsp;&nbsp; 🟠 Ethanol &nbsp;&nbsp; 🟡 CH₄ &nbsp;&nbsp; 🟢 H₂S")
 
-    # Canvas animation with JS
+    # Canvas animation with JS (smoke + shutters)
     components.html(f"""
     <div style="position:relative; width:100%; max-width:1200px; margin: 8px 0 16px 0;">
       <img id="bg" src="{facility_b64}" style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid #1f2a44;"/>
@@ -265,7 +284,6 @@ def render_facility():
         draw();
       }}
       function pctToPx(rectPct) {{
-        // rectPct = [l,t,w,h] in %
         const r = img.getBoundingClientRect();
         const l = rectPct[0]*r.width/100, t = rectPct[1]*r.height/100;
         const w = rectPct[2]*r.width/100, h = rectPct[3]*r.height/100;
@@ -283,10 +301,9 @@ def render_facility():
       }}
       function drawShutters(rect, k) {{
         const [l,t,w,h] = rect;
-        const y = t + (-h * (1-k)); // slide down from top
+        const y = t + (-h * (1-k));
         ctx.fillStyle = 'rgba(148,163,184,0.22)';
         ctx.fillRect(l, y, w, h);
-        // hatch
         ctx.strokeStyle = 'rgba(148,163,184,0.35)';
         ctx.lineWidth = 2;
         for (let x=l; x<l+w; x+=12) {{
@@ -305,15 +322,13 @@ def render_facility():
         const elapsed = now - a.start_ts;
         const p = Math.max(0, Math.min(1, elapsed / a.duration));
         let smokeP = Math.min(1, p*1.2);
-        // start fading after fade_after
         if (elapsed > a.fade_after) {{
           const fadeK = Math.min(1, (elapsed - a.fade_after) / (a.duration - a.fade_after + 0.01));
           smokeP = Math.max(0, 1 - fadeK);
         }}
         drawSmokeRect(rect, smokeP, a.color);
-        // shutters
         if (elapsed >= a.shutters_at) {{
-          const k = Math.min(1, (elapsed - a.shutters_at)/0.8); // slide in 0.8s
+          const k = Math.min(1, (elapsed - a.shutters_at)/0.8);
           drawShutters(rect, k);
         }}
         requestAnimationFrame(draw);
@@ -337,13 +352,13 @@ def render_room(rn: str):
     # Controls
     colL, colR = st.columns([2,1])
     with colL:
-        if st.button("← Back to Facility", use_column_width=True):
+        if st.button("← Back to Facility", key=f"back_{rn}"):
             set_view("facility")
-            st.experimental_rerun()
+            st.rerun()
 
     with colR:
         st.markdown("**Simulate Spike (Room)**")
-        if st.button(f"Simulate {gas} Spike", use_column_width=True, key=f"room_spike_{rn}"):
+        if st.button(f"Simulate {gas} Spike", key=f"room_spike_{rn}"):
             st.session_state.spike = {
                 "room": rn,
                 "gas": gas,
@@ -353,7 +368,7 @@ def render_room(rn: str):
                 "fade_after": 9
             }
             simulate_live_values()
-            st.experimental_rerun()
+            st.rerun()
 
     # Pack active spike info for this room
     sp = st.session_state.spike
@@ -367,7 +382,7 @@ def render_room(rn: str):
         "active": active
     })
 
-    # Canvas animation
+    # Canvas animation (room)
     components.html(f"""
     <div style="position:relative; width:100%; max-width:1200px; margin: 8px 0 16px 0;">
       <img id="bg" src="{room_b64}" style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid #1f2a44;"/>
@@ -398,7 +413,6 @@ def render_room(rn: str):
       }}
 
       function drawShutters(k) {{
-        // slide from top
         const w = canvas.width, h = canvas.height;
         const y = -h*(1-k);
         ctx.fillStyle = 'rgba(148,163,184,0.22)';
@@ -422,7 +436,6 @@ def render_room(rn: str):
         const total = a.duration;
         const color = a.color;
         const r = img.getBoundingClientRect();
-        // Use mid-right as leak source visually
         const cx = r.width*0.62, cy = r.height*0.48;
 
         let p = Math.max(0, Math.min(1, elapsed / total));
@@ -432,9 +445,7 @@ def render_room(rn: str):
           smokeP = Math.max(0, 1 - fadeK);
         }}
 
-        // base radius
         const baseR = Math.max(r.width, r.height) * 0.12 * smokeP;
-        // multi-blob to feel fume-like
         drawBlob(cx, cy, baseR, color, 16);
         drawBlob(cx-60, cy-20, baseR*0.9, color, 14);
         drawBlob(cx+40, cy+30, baseR*0.8, color, 12);
@@ -459,7 +470,7 @@ def render_room(rn: str):
         c1, c2, c3 = st.columns([3,3,2])
         with c1:
             st.write(key)
-            if st.button("Simulate Spike", key=f"spike_{key}", use_column_width=True):
+            if st.button("Simulate Spike", key=f"spike_{key}"):
                 g = gas_from_label(key)
                 st.session_state.spike = {
                     "room": rn,
@@ -470,7 +481,7 @@ def render_room(rn: str):
                     "fade_after": 9
                 }
                 simulate_live_values()
-                st.experimental_rerun()
+                st.rerun()
         with c2:
             simulate_live_values()
             df = get_series(key)
@@ -492,6 +503,7 @@ def render_room(rn: str):
                     st.warning(f"WARN • {live:.2f}{thr['units']}")
                 else:
                     st.success(f"Healthy • {live:.2f}{thr['units']}")
+
 
 # ===================== ROUTING =====================
 render_sidebar_ai()
